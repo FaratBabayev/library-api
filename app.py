@@ -5,7 +5,7 @@ from datetime import date, timedelta
 
 from flask import Flask, jsonify, request
 from services import calculate_fine
-from notifications import notify
+from notifications import notify, notify_return, notify_fine_paid
 app = Flask(__name__)
 
 
@@ -79,22 +79,6 @@ def check(value, kind):
 
 def money(x):
     return round(float(x), 2)
-
-
-def notify(kind, title="", email="", send=True):
-    if not send:
-        return
-    if kind == "checkout":
-        subject = "Book checked out"
-        body = "You checked out " + title
-    elif kind == "renew":
-        subject = "Loan renewed"
-        body = "You renewed " + title
-    else:
-        subject = "Library notice"
-        body = title
-    with open("outbox.txt", "a") as f:
-        f.write("TO: " + email + " | SUBJECT: " + subject + " | BODY: " + body + "\n")
 
 # ---------- books ----------
 
@@ -350,10 +334,7 @@ def create_loan():
     conn.commit()
     loan = conn.execute("SELECT * FROM loans WHERE id = ?", (cur.lastrowid,)).fetchone()
     conn.close()
-
     notify("checkout", book[1], member[2])
-    notify("checkout", book[1])
-
     return (
         jsonify(
             {
@@ -392,12 +373,7 @@ def return_book(loan_id):
     updated = conn.execute("SELECT * FROM loans WHERE id = ?", (loan_id,)).fetchone()
     conn.close()
 
-    with open("outbox.txt", "a") as f:
-        f.write(
-            "TO: " + member[2] + " | SUBJECT: Book returned | BODY: You returned " + book[1]
-            + ". Fine: $" + str(money(fine)) + "\n"
-        )
-
+    notify_return(member[2], book[1], fine)
     return jsonify(
         {
             "id": updated[0],
@@ -473,12 +449,7 @@ def pay_fine(loan_id):
     member = conn.execute("SELECT * FROM members WHERE id = ?", (loan[2],)).fetchone()
     updated = conn.execute("SELECT * FROM loans WHERE id = ?", (loan_id,)).fetchone()
     conn.close()
-
-    with open("outbox.txt", "a") as f:
-        f.write(
-            "TO: " + member[2] + " | SUBJECT: Fine paid | BODY: We received $" + str(money(loan[5])) + "\n"
-        )
-
+    notify_fine_paid(member[2], loan[5])
     return jsonify(
         {
             "id": updated[0],
