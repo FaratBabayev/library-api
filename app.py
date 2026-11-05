@@ -4,10 +4,10 @@ import sqlite3
 from datetime import date, timedelta
 
 from flask import Flask, jsonify, request
-
+from services import calculate_fine
+from notifications import notify
 app = Flask(__name__)
 
-CURRENT_MEMBER = None
 
 
 def init_db():
@@ -81,7 +81,7 @@ def money(x):
     return round(float(x), 2)
 
 
-def notify(kind, title="", send=True):
+def notify(kind, title="", email="", send=True):
     if not send:
         return
     if kind == "checkout":
@@ -94,8 +94,7 @@ def notify(kind, title="", send=True):
         subject = "Library notice"
         body = title
     with open("outbox.txt", "a") as f:
-        f.write("TO: " + CURRENT_MEMBER[2] + " | SUBJECT: " + subject + " | BODY: " + body + "\n")
-
+        f.write("TO: " + email + " | SUBJECT: " + subject + " | BODY: " + body + "\n")
 
 # ---------- books ----------
 
@@ -222,9 +221,7 @@ def member_loans(member_id):
     for loan in rows:
         if loan[4] == 0:
             open_loans += 1
-            days_late = (date.today() - date.fromisoformat(loan[3])).days
-            if days_late > 0:
-                owed += days_late * 0.5
+            owed += calculate_fine(loan[3])
         elif loan[6] == 0:
             owed += loan[5]
         loans.append(
@@ -257,7 +254,7 @@ def list_loans():
         current_fine = loan[5]
         days_late = (date.today() - date.fromisoformat(loan[3])).days
         if loan[4] == 0:
-            current_fine = max(0, days_late) * 0.50
+            current_fine = calculate_fine(loan[3])
         if request.args.get("overdue") == "true" and (loan[4] == 1 or days_late <= 0):
             continue
         result.append(
@@ -286,8 +283,7 @@ def get_loan(loan_id):
         return jsonify({"error": "loan not found"}), 404
     current_fine = loan[5]
     if loan[4] == 0:
-        days_late = (date.today() - date.fromisoformat(loan[3])).days
-        current_fine = max(0, days_late) * 0.50
+        current_fine = calculate_fine(loan[3])
     return jsonify(
         {
             "id": loan[0],
@@ -306,7 +302,6 @@ def get_loan(loan_id):
 
 @app.route("/loans", methods=["POST"])
 def create_loan():
-    global CURRENT_MEMBER
     data = request.get_json(silent=True) or {}
     if not data.get("book_id") or not data.get("member_id"):
         return jsonify({"error": "book_id and member_id are required"}), 400
@@ -332,9 +327,7 @@ def create_loan():
     for loan in rows:
         if loan[4] == 0:
             open_loans += 1
-            days_late = (date.today() - date.fromisoformat(loan[3])).days
-            if days_late > 0:
-                owed += days_late * 0.5
+            owed += calculate_fine(loan[3])
         elif loan[6] == 0:
             owed += loan[5]
     if owed > 0:
@@ -358,7 +351,7 @@ def create_loan():
     loan = conn.execute("SELECT * FROM loans WHERE id = ?", (cur.lastrowid,)).fetchone()
     conn.close()
 
-    CURRENT_MEMBER = member
+    notify("checkout", book[1], member[2])
     notify("checkout", book[1])
 
     return (
@@ -390,8 +383,7 @@ def return_book(loan_id):
         conn.close()
         return jsonify({"error": "loan already returned"}), 409
 
-    days_late = (date.today() - date.fromisoformat(loan[3])).days
-    fine = max(0, days_late) * 0.50
+    fine = calculate_fine(loan[3])
     conn.execute("UPDATE loans SET returned = 1, fine = ? WHERE id = ?", (fine, loan_id))
     conn.execute("UPDATE books SET available = 1 WHERE id = ?", (loan[1],))
     conn.commit()
@@ -423,7 +415,6 @@ def return_book(loan_id):
 
 @app.route("/loans/<int:loan_id>/renew", methods=["POST"])
 def renew_loan(loan_id):
-    global CURRENT_MEMBER
     conn = sqlite3.connect("library.db")
     loan = conn.execute("SELECT * FROM loans WHERE id = ?", (loan_id,)).fetchone()
     if loan is None:
@@ -442,13 +433,12 @@ def renew_loan(loan_id):
     new_due = (date.fromisoformat(loan[3]) + timedelta(days=14)).isoformat()
     conn.execute("UPDATE loans SET due_date = ?, renewals = renewals + 1 WHERE id = ?", (new_due, loan_id))
     conn.commit()
-    CURRENT_MEMBER = conn.execute("SELECT * FROM members WHERE id = ?", (loan[2],)).fetchone()
+    member = conn.execute("SELECT * FROM members WHERE id = ?", (loan[2],)).fetchone()
     book = conn.execute("SELECT * FROM books WHERE id = ?", (loan[1],)).fetchone()
     updated = conn.execute("SELECT * FROM loans WHERE id = ?", (loan_id,)).fetchone()
     conn.close()
 
-    notify("renew", book[1])
-
+    notify("renew", book[1], member[2])
     return jsonify(
         {
             "id": updated[0],
@@ -525,7 +515,7 @@ def report_overdue():
     for r in rows:
         days_late = (date.today() - date.fromisoformat(r[3])).days
         if days_late > 0:
-            fine = days_late * 0.5
+            fine = calculate_fine(r[3])
             total += fine
             items.append(
                 {"loan_id": r[0], "title": r[1], "member": r[2], "days_late": days_late, "fine": money(fine)}
@@ -544,8 +534,7 @@ def report_summary():
     for loan in rows:
         if loan[4] == 0:
             on_loan += 1
-            days_late = (date.today() - date.fromisoformat(loan[3])).days
-            outstanding += max(0, days_late) * 0.50
+            outstanding += calculate_fine(loan[3])
         elif loan[6] == 0:
             outstanding += loan[5]
     return jsonify({"total_books": total_books, "on_loan": on_loan, "fines_outstanding": money(outstanding)})
