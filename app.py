@@ -1,7 +1,7 @@
 import os
 import re
 from datetime import date, timedelta
-from db import connect, init_db
+from db import init_db
 
 from flask import Flask, jsonify, request
 from fines import calculate_fine
@@ -22,41 +22,12 @@ from member_repository import (
 from loan_repository import (
     get_all_loans,
     get_loan_by_id,
-    get_loans_by_member
-)
-from loan_repository import (
-    get_all_loans,
-    get_loan_by_id,
-    get_loans_by_member,
-    create_loan_record
-)
-from loan_repository import (
-    get_all_loans,
-    get_loan_by_id,
-    get_loans_by_member,
-    create_loan_record,
-    return_loan_record
-)
-
-from loan_repository import (
-    get_all_loans,
-    get_loan_by_id,
-    get_loans_by_member,
-    create_loan_record,
-    return_loan_record,
-    renew_loan_record
-)
-
-from loan_repository import (
-    get_all_loans,
-    get_loan_by_id,
     get_loans_by_member,
     create_loan_record,
     return_loan_record,
     renew_loan_record,
     pay_fine_record
 )
-
 from report_repository import (
     get_overdue_loans,
     get_report_summary_data
