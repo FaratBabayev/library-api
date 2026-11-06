@@ -1,14 +1,35 @@
 import os
 import re
 from datetime import date, timedelta
-from database import get_connection, init_db
+from db import connect, init_db
 
 from flask import Flask, jsonify, request
-from services import calculate_fine
+from fines import calculate_fine
 from notifications import notify, notify_return, notify_fine_paid
 app = Flask(__name__)
-
-
+from book_repository import (
+    get_all_books,
+    get_book_by_id,
+    create_book as repository_create_book,
+    delete_book as repository_delete_book
+)
+from member_repository import (
+    get_all_members,
+    get_member_by_id,
+    get_member_by_email,
+    create_member as repository_create_member
+)
+from loan_repository import (
+    get_all_loans,
+    get_loan_by_id,
+    get_loans_by_member
+)
+from loan_repository import (
+    get_all_loans,
+    get_loan_by_id,
+    get_loans_by_member,
+    create_loan_record
+)
 # ---------- helpers ----------
 
 
@@ -33,124 +54,158 @@ def money(x):
     return round(float(x), 2)
 
 # ---------- books ----------
-
+# ---------- books ----------
 
 @app.route("/books", methods=["GET"])
 def list_books():
-    conn = get_connection()
-    if request.args.get("available") == "true":
-        rows = conn.execute("SELECT * FROM books WHERE available = 1").fetchall()
-    else:
-        rows = conn.execute("SELECT * FROM books").fetchall()
-    conn.close()
+    available_only = request.args.get("available") == "true"
+
+    rows = get_all_books(available_only)
+
     result = []
+
     for r in rows:
-        result.append({"id": r[0], "title": r[1], "author": r[2], "isbn": r[3], "available": bool(r[4])})
+        result.append({
+            "id": r[0],
+            "title": r[1],
+            "author": r[2],
+            "isbn": r[3],
+            "available": bool(r[4])
+        })
+
     return jsonify(result)
 
 
 @app.route("/books/<int:book_id>", methods=["GET"])
 def get_book(book_id):
-    conn = get_connection()
-    r = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
-    conn.close()
+    r = get_book_by_id(book_id)
+
     if r is None:
         return jsonify({"error": "book not found"}), 404
-    return jsonify({"id": r[0], "title": r[1], "author": r[2], "isbn": r[3], "available": bool(r[4])})
+
+    return jsonify({
+        "id": r[0],
+        "title": r[1],
+        "author": r[2],
+        "isbn": r[3],
+        "available": bool(r[4])
+    })
 
 
 @app.route("/books", methods=["POST"])
 def create_book():
     data = request.get_json(silent=True) or {}
+
     if not data.get("title") or not data.get("author"):
         return jsonify({"error": "title and author are required"}), 400
+
     if not check(data.get("isbn"), "isbn"):
         return jsonify({"error": "invalid isbn"}), 400
-    conn = get_connection()
-    cur = conn.execute(
-        "INSERT INTO books (title, author, isbn, available) VALUES (?, ?, ?, 1)",
-        (data["title"], data["author"], data["isbn"]),
+
+    r = repository_create_book(
+        data["title"],
+        data["author"],
+        data["isbn"]
     )
-    conn.commit()
-    r = conn.execute("SELECT * FROM books WHERE id = ?", (cur.lastrowid,)).fetchone()
-    conn.close()
-    return jsonify({"id": r[0], "title": r[1], "author": r[2], "isbn": r[3], "available": bool(r[4])}), 201
+
+    return jsonify({
+        "id": r[0],
+        "title": r[1],
+        "author": r[2],
+        "isbn": r[3],
+        "available": bool(r[4])
+    }), 201
 
 
 @app.route("/books/<int:book_id>", methods=["DELETE"])
 def delete_book(book_id):
-    conn = get_connection()
-    r = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
+    r = get_book_by_id(book_id)
+
     if r is None:
-        conn.close()
         return jsonify({"error": "book not found"}), 404
+
     if r[4] == 0:
-        conn.close()
         return jsonify({"error": "book is on loan"}), 409
-    conn.execute("DELETE FROM books WHERE id = ?", (book_id,))
-    conn.commit()
-    conn.close()
+
+    repository_delete_book(book_id)
+
     return "", 204
+# ---------- members ----------
 
 
 # ---------- members ----------
 
-
 @app.route("/members", methods=["GET"])
 def list_members():
-    conn = get_connection()
-    rows = conn.execute("SELECT * FROM members").fetchall()
-    conn.close()
+    rows = get_all_members()
+
     result = []
+
     for r in rows:
-        result.append({"id": r[0], "name": r[1], "email": r[2], "type": r[3]})
+        result.append({
+            "id": r[0],
+            "name": r[1],
+            "email": r[2],
+            "type": r[3]
+        })
+
     return jsonify(result)
 
 
 @app.route("/members/<int:member_id>", methods=["GET"])
 def get_member(member_id):
-    conn = get_connection()
-    r = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
-    conn.close()
+    r = get_member_by_id(member_id)
+
     if r is None:
         return jsonify({"error": "member not found"}), 404
-    return jsonify({"id": r[0], "name": r[1], "email": r[2], "type": r[3]})
+
+    return jsonify({
+        "id": r[0],
+        "name": r[1],
+        "email": r[2],
+        "type": r[3]
+    })
 
 
 @app.route("/members", methods=["POST"])
 def create_member():
     data = request.get_json(silent=True) or {}
+
     if not data.get("name"):
         return jsonify({"error": "name is required"}), 400
+
     if not check(data.get("email"), "email"):
         return jsonify({"error": "invalid email"}), 400
+
     member_type = data.get("type", "student")
+
     if not check(member_type, "member_type"):
         return jsonify({"error": "type must be student or staff"}), 400
-    conn = get_connection()
-    existing = conn.execute("SELECT * FROM members WHERE email = ?", (data["email"],)).fetchone()
-    if existing is not None:
-        conn.close()
-        return jsonify({"error": "email already registered"}), 409
-    cur = conn.execute(
-        "INSERT INTO members (name, email, type) VALUES (?, ?, ?)",
-        (data["name"], data["email"], member_type),
-    )
-    conn.commit()
-    r = conn.execute("SELECT * FROM members WHERE id = ?", (cur.lastrowid,)).fetchone()
-    conn.close()
-    return jsonify({"id": r[0], "name": r[1], "email": r[2], "type": r[3]}), 201
 
+    existing = get_member_by_email(data["email"])
+
+    if existing is not None:
+        return jsonify({"error": "email already registered"}), 409
+
+    r = repository_create_member(
+        data["name"],
+        data["email"],
+        member_type
+    )
+
+    return jsonify({
+        "id": r[0],
+        "name": r[1],
+        "email": r[2],
+        "type": r[3]
+    }), 201
 
 @app.route("/members/<int:member_id>/loans", methods=["GET"])
 def member_loans(member_id):
-    conn = get_connection()
-    m = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
+    m = get_member_by_id(member_id)
     if m is None:
-        conn.close()
         return jsonify({"error": "member not found"}), 404
-    rows = conn.execute("SELECT * FROM loans WHERE member_id = ?", (member_id,)).fetchall()
-    conn.close()
+    rows = get_loans_by_member(member_id)
     owed = 0
     open_loans = 0
     loans = []
@@ -182,9 +237,7 @@ def member_loans(member_id):
 
 @app.route("/loans", methods=["GET"])
 def list_loans():
-    conn = get_connection()
-    rows = conn.execute("SELECT * FROM loans").fetchall()
-    conn.close()
+    rows = get_all_loans()
     result = []
     for loan in rows:
         current_fine = loan[5]
@@ -212,9 +265,7 @@ def list_loans():
 
 @app.route("/loans/<int:loan_id>", methods=["GET"])
 def get_loan(loan_id):
-    conn = get_connection()
-    loan = conn.execute("SELECT * FROM loans WHERE id = ?", (loan_id,)).fetchone()
-    conn.close()
+    loan = get_loan_by_id(loan_id)
     if loan is None:
         return jsonify({"error": "loan not found"}), 404
     current_fine = loan[5]
@@ -236,78 +287,85 @@ def get_loan(loan_id):
     )
 
 
+
 @app.route("/loans", methods=["POST"])
 def create_loan():
     data = request.get_json(silent=True) or {}
+
     if not data.get("book_id") or not data.get("member_id"):
         return jsonify({"error": "book_id and member_id are required"}), 400
+
     if data.get("due_date") and not check(data["due_date"], "date"):
         return jsonify({"error": "invalid due_date"}), 400
 
-    conn = get_connection()
-    book = conn.execute("SELECT * FROM books WHERE id = ?", (data["book_id"],)).fetchone()
+    book = get_book_by_id(data["book_id"])
+
     if book is None:
-        conn.close()
         return jsonify({"error": "book not found"}), 404
-    member = conn.execute("SELECT * FROM members WHERE id = ?", (data["member_id"],)).fetchone()
+
+    member = get_member_by_id(data["member_id"])
+
     if member is None:
-        conn.close()
         return jsonify({"error": "member not found"}), 404
+
     if book[4] == 0:
-        conn.close()
         return jsonify({"error": "book is not available"}), 409
 
-    rows = conn.execute("SELECT * FROM loans WHERE member_id = ?", (data["member_id"],)).fetchall()
+    rows = get_loans_by_member(data["member_id"])
+
     owed = 0
     open_loans = 0
+
     for loan in rows:
         if loan[4] == 0:
             open_loans += 1
             owed += calculate_fine(loan[3])
         elif loan[6] == 0:
             owed += loan[5]
+
     if owed > 0:
-        conn.close()
         return jsonify({"error": "member has unpaid fines"}), 409
+
     limit = 3
+
     if member[3] == "staff":
         limit = 5
+
     if open_loans >= limit:
-        conn.close()
         return jsonify({"error": "loan limit reached"}), 409
 
     today = date.today()
-    due_date = data.get("due_date") or (today + timedelta(days=14)).isoformat()
-    cur = conn.execute(
-        "INSERT INTO loans (book_id, member_id, due_date, checked_out) VALUES (?, ?, ?, ?)",
-        (data["book_id"], data["member_id"], due_date, today.isoformat()),
+    due_date = data.get("due_date") or (
+        today + timedelta(days=14)
+    ).isoformat()
+
+    loan = create_loan_record(
+        data["book_id"],
+        data["member_id"],
+        due_date,
+        today.isoformat()
     )
-    conn.execute("UPDATE books SET available = 0 WHERE id = ?", (data["book_id"],))
-    conn.commit()
-    loan = conn.execute("SELECT * FROM loans WHERE id = ?", (cur.lastrowid,)).fetchone()
-    conn.close()
+
     notify("checkout", book[1], member[2])
+
     return (
-        jsonify(
-            {
-                "id": loan[0],
-                "book_id": loan[1],
-                "member_id": loan[2],
-                "due_date": loan[3],
-                "returned": bool(loan[4]),
-                "fine": money(loan[5]),
-                "fine_paid": bool(loan[6]),
-                "renewals": loan[7],
-                "checked_out": loan[8],
-            }
-        ),
+        jsonify({
+            "id": loan[0],
+            "book_id": loan[1],
+            "member_id": loan[2],
+            "due_date": loan[3],
+            "returned": bool(loan[4]),
+            "fine": money(loan[5]),
+            "fine_paid": bool(loan[6]),
+            "renewals": loan[7],
+            "checked_out": loan[8],
+        }),
         201,
     )
 
-
 @app.route("/loans/<int:loan_id>/return", methods=["POST"])
 def return_book(loan_id):
-    conn = get_connection()
+    conn = connect()
     loan = conn.execute("SELECT * FROM loans WHERE id = ?", (loan_id,)).fetchone()
     if loan is None:
         conn.close()
@@ -343,7 +401,7 @@ def return_book(loan_id):
 
 @app.route("/loans/<int:loan_id>/renew", methods=["POST"])
 def renew_loan(loan_id):
-    conn = get_connection()
+    conn = connect()
     loan = conn.execute("SELECT * FROM loans WHERE id = ?", (loan_id,)).fetchone()
     if loan is None:
         conn.close()
@@ -384,7 +442,7 @@ def renew_loan(loan_id):
 
 @app.route("/loans/<int:loan_id>/pay-fine", methods=["POST"])
 def pay_fine(loan_id):
-    conn = get_connection()
+    conn = connect()
     loan = conn.execute("SELECT * FROM loans WHERE id = ?", (loan_id,)).fetchone()
     if loan is None:
         conn.close()
@@ -422,7 +480,7 @@ def pay_fine(loan_id):
 
 @app.route("/reports/overdue", methods=["GET"])
 def report_overdue():
-    conn = get_connection()
+    conn = connect()
     rows = conn.execute(
         """
         SELECT loans.id, books.title, members.name, loans.due_date
@@ -448,7 +506,7 @@ def report_overdue():
 
 @app.route("/reports/summary", methods=["GET"])
 def report_summary():
-    conn = get_connection()
+    conn = connect()
     total_books = conn.execute("SELECT COUNT(*) FROM books").fetchone()[0]
     rows = conn.execute("SELECT * FROM loans").fetchall()
     conn.close()
