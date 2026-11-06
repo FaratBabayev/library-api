@@ -56,6 +56,11 @@ from loan_repository import (
     renew_loan_record,
     pay_fine_record
 )
+
+from report_repository import (
+    get_overdue_loans,
+    get_report_summary_data
+)
 # ---------- helpers ----------
 
 
@@ -501,46 +506,49 @@ def pay_fine(loan_id):
 
 @app.route("/reports/overdue", methods=["GET"])
 def report_overdue():
-    conn = connect()
-    rows = conn.execute(
-        """
-        SELECT loans.id, books.title, members.name, loans.due_date
-        FROM loans
-        JOIN books ON books.id = loans.book_id
-        JOIN members ON members.id = loans.member_id
-        WHERE loans.returned = 0
-        """
-    ).fetchall()
-    conn.close()
+    rows = get_overdue_loans()
+
     items = []
     total = 0
+
     for r in rows:
         days_late = (date.today() - date.fromisoformat(r[3])).days
+
         if days_late > 0:
             fine = calculate_fine(r[3])
             total += fine
-            items.append(
-                {"loan_id": r[0], "title": r[1], "member": r[2], "days_late": days_late, "fine": money(fine)}
-            )
-    return jsonify({"items": items, "total_fines": money(total)})
 
+            items.append({
+                "loan_id": r[0],
+                "title": r[1],
+                "member": r[2],
+                "days_late": days_late,
+                "fine": money(fine)
+            })
+
+    return jsonify({
+        "items": items,
+        "total_fines": money(total)
+    })
 
 @app.route("/reports/summary", methods=["GET"])
 def report_summary():
-    conn = connect()
-    total_books = conn.execute("SELECT COUNT(*) FROM books").fetchone()[0]
-    rows = conn.execute("SELECT * FROM loans").fetchall()
-    conn.close()
+    total_books, rows = get_report_summary_data()
+
     on_loan = 0
     outstanding = 0
+
     for loan in rows:
         if loan[4] == 0:
             on_loan += 1
             outstanding += calculate_fine(loan[3])
         elif loan[6] == 0:
             outstanding += loan[5]
-    return jsonify({"total_books": total_books, "on_loan": on_loan, "fines_outstanding": money(outstanding)})
 
-
+    return jsonify({
+        "total_books": total_books,
+        "on_loan": on_loan,
+        "fines_outstanding": money(outstanding)
+    })
 if not os.path.exists("library.db"):
     init_db()
