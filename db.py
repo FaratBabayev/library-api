@@ -1,12 +1,18 @@
+
 import sqlite3
 from datetime import date, timedelta
 
-def get_connection():
-    return sqlite3.connect("library.db")
+DB_PATH = "library.db"
+
+
+def connect():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def init_db():
-    conn = get_connection()
+    conn = connect()
 
     conn.executescript("""
         DROP TABLE IF EXISTS books;
@@ -15,19 +21,28 @@ def init_db():
 
         CREATE TABLE books (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT, author TEXT, isbn TEXT, available INTEGER DEFAULT 1
+            title TEXT,
+            author TEXT,
+            isbn TEXT,
+            available INTEGER DEFAULT 1
         );
 
         CREATE TABLE members (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT, email TEXT UNIQUE, type TEXT
+            name TEXT,
+            email TEXT UNIQUE,
+            type TEXT
         );
 
         CREATE TABLE loans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            book_id INTEGER, member_id INTEGER, due_date TEXT,
-            returned INTEGER DEFAULT 0, fine REAL DEFAULT 0,
-            fine_paid INTEGER DEFAULT 0, renewals INTEGER DEFAULT 0,
+            book_id INTEGER,
+            member_id INTEGER,
+            due_date TEXT,
+            returned INTEGER DEFAULT 0,
+            fine REAL DEFAULT 0,
+            fine_paid INTEGER DEFAULT 0,
+            renewals INTEGER DEFAULT 0,
             checked_out TEXT
         );
     """)
@@ -41,10 +56,12 @@ def init_db():
     ]
 
     conn.executemany(
-        "INSERT INTO books (title, author, isbn, available) VALUES (?, ?, ?, ?)",
+        """
+        INSERT INTO books (title, author, isbn, available)
+        VALUES (?, ?, ?, ?)
+        """,
         books
     )
-
     members = [
         ("Sam Rivera", "sam@campus.edu", "student"),
         ("Dr. Noor Aziz", "noor@campus.edu", "staff"),
@@ -52,19 +69,22 @@ def init_db():
     ]
 
     conn.executemany(
-        "INSERT INTO members (name, email, type) VALUES (?, ?, ?)",
+        """
+        INSERT INTO members (name, email, type)
+        VALUES (?, ?, ?)
+        """,
         members
     )
-
     today = date.today()
-
     conn.execute(
-        "INSERT INTO loans (book_id, member_id, due_date, checked_out) VALUES (5, 3, ?, ?)",
+        """
+        INSERT INTO loans (book_id, member_id, due_date, checked_out)
+        VALUES (5, 3, ?, ?)
+        """,
         (
             (today - timedelta(days=5)).isoformat(),
             (today - timedelta(days=19)).isoformat()
         )
     )
-
     conn.commit()
     conn.close()
